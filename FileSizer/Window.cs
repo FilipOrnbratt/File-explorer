@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.IO;
 using System.Windows.Forms;
@@ -10,14 +9,17 @@ namespace FileSizer
 {
     class Window : Form
     {
-        private const int DRAWX = 10, DRAWY = 52, DRAWYOFFSET = 20, DRAWWIDTH = 1000, 
-            DRAWHEIGHT = 16, MAXFILES = 20;
-        private List<Folder> drives;
+        private const int DRAWX = 10, DRAWY = 80, DRAWYOFFSET = 20, DRAWWIDTH = 1000,
+            DRAWHEIGHT = 16, MAXFILES = 25, SORTX = 5, SORTY = 30, REFRESHX = 800, REFRESHY = 30;
+        private Button sortByNameButton, sortBySizeButton, sortByTypeButton, refreshButton, backButton;
+        private Folder root;
         private string currentPath, lastPath;
         private string[] files;
-        private string[] fileNames;
         private Folder currentFolder;
-        private int scroll, maxScroll;
+        private int scroll, maxScroll, scrollBarY;
+        private bool scrollBarPressed;
+        private Folder.SortStatus sortStatus;
+        private Folder.SortStatus lastSortStatus;
 
         public static void Main()
         {
@@ -27,58 +29,96 @@ namespace FileSizer
         public Window()
         {
             files = new string[0];
-            fileNames = new string[0];
-            drives = new List<Folder>();
-            new Thread(init).Start();
-            new Thread(UpdateFiles).Start();
-            int i = 0;
+
+            sortStatus = Folder.SortStatus.TYPE;
+            lastSortStatus = sortStatus;
+            
+            root = new Folder(null, "root");
             foreach (DriveInfo d in DriveInfo.GetDrives())
             {
-                if (d.DriveType == DriveType.Fixed)
-                {
-                    Folder folder = new Folder(null, d.Name);
-                    drives.Add(folder);
-                    folder.FindChilds();
-                }
+                Folder drive = new Folder(root, d.Name);
+                root.AddFolder(drive);
+                Thread driveThread = new Thread(new ParameterizedThreadStart(StartDriveSearch));
+                driveThread.Start(drive);
             }
-            Console.WriteLine("All files loaded");
+
+            new Thread(Init).Start();
+            new Thread(UpdateFilesPeriodically).Start();
         }
 
-        private void init()
+        private void StartDriveSearch(object folder)
         {
+            ((Folder)folder).SearchFolder();
+            bool drivesStillSearching = false;
+            foreach (Folder drive in root.GetFolders())
+            {
+                if (drive.GetStatus() == Folder.FileStatus.LOADING)
+                {
+                    drivesStillSearching = true;
+                }
+            }
+            if (!drivesStillSearching)
+            {
+                root.SetStatus(Folder.FileStatus.DONE);
+            }
+        }
+
+        private void Init()
+        {
+            InitButtons();
             this.DoubleBuffered = true;
             this.Size = new Size(1280, 720);
             this.Paint += Draw;
-            this.MouseClick += MouseEvent;
+            this.MouseDown += MouseDownEvent;
+            this.MouseUp += MouseUpEvent;
+            this.MouseMove += MouseMoveEvent;
             this.FormClosed += CloseEvent;
             this.MouseWheel += MouseWheelEvent;
             ShowDialog();
         }
 
-        private void UpdateFiles()
+        private void Window_MouseHover(object sender, EventArgs e)
         {
-            while(drives.Count == 0)
-            {
-                Thread.Sleep(100);
-            }
-            currentFolder = drives[0];
-            currentPath = currentFolder.GetPath().Substring(0, currentFolder.GetPath().Length - 1);
+            throw new NotImplementedException();
+        }
+
+        private void InitButtons()
+        {
+            backButton = new Button(new Rectangle(5, 10, 40, 20), "Back", Color.Red, true);
+            sortBySizeButton = new Button(new Rectangle(SORTX + 60, SORTY, 35, 20), "Size", Color.Green, false, Color.Gray);
+            sortByNameButton = new Button(new Rectangle(SORTX + 60 + 40, SORTY, 45, 20), "Name", Color.Green, false, Color.Gray);
+            sortByTypeButton = new Button(new Rectangle(SORTX + 60 + 40 + 50, SORTY, 40, 20), "Type", Color.Green, false, Color.Gray);
+            refreshButton = new Button(new Rectangle(REFRESHX, REFRESHY, 60, 20), "Refresh", Color.Green, false, Color.Gray);
+        }
+
+        private void UpdateFilesPeriodically()
+        {
+            currentFolder = root;
+            currentPath = currentFolder.GetPath();
             lastPath = currentPath;
             while (true)
             {
-                if(currentFolder != null)
+                UpdateFiles();
+                Thread.Sleep(1000);
+            }
+        }
+
+        private void UpdateFiles()
+        {
+            if(currentFolder != null)
+            {
+                lock (files)
                 {
-                    lock (files)
+                    string[] currentFiles = currentFolder.GetFileInfo(sortStatus);
+                    if (!files.SequenceEqual<string>(currentFiles) || lastSortStatus != sortStatus)
                     {
-                        if(!files.SequenceEqual<string>(currentFolder.GetFileInfo()))
-                        {
-                            files = currentFolder.GetFileInfo();
-                            UpdateScroll();
-                        }
+                        files = currentFiles;
+                        UpdateScroll();
+                        UpdateButtons();
+                        lastSortStatus = sortStatus;
+                        Repaint();
                     }
-                    Repaint();
                 }
-                Thread.Sleep(500);
             }
         }
 
@@ -92,24 +132,40 @@ namespace FileSizer
                 });
             }
             catch (InvalidOperationException e)
-            {
-
-            }
+            {}
         }
 
         private void Draw(object sender, PaintEventArgs e)
         {
             Graphics g = e.Graphics;
-            g.FillRectangle(new SolidBrush(Color.Red), new Rectangle(10, 2, 30, 20));
+            backButton.Draw(g);
+            refreshButton.Draw(g);
             if (currentFolder != null)
             {
-                g.DrawString(currentFolder.IsLoading() ? "Loading files..." : "", new Font(FontFamily.GenericSerif, 12), new SolidBrush(Color.Red),
-                   new PointF(600, 40));
+                string statusMessage = "";
+                switch (currentFolder.GetStatus())
+                {
+                    case Folder.FileStatus.LOADING:
+                        statusMessage = "Loading files...";
+                        break;
+                    case Folder.FileStatus.DONE:
+                        statusMessage = "";
+                        break;
+
+                }
+                g.DrawString(statusMessage, new Font(FontFamily.GenericSerif, 12), new SolidBrush(Color.Red),
+                   new PointF(REFRESHX + 70, REFRESHY));
             }
-            
+
+            g.DrawString("Sort by:", new Font(FontFamily.GenericSerif, 12), new SolidBrush(Color.Black),
+                new PointF(SORTX, SORTY));
+            sortBySizeButton.Draw(g);
+            sortByNameButton.Draw(g);
+            sortByTypeButton.Draw(g);
+
             g.DrawString(currentPath, new Font(FontFamily.GenericSerif, 20), new SolidBrush(Color.Black), 
                 new PointF(50, 2));
-            g.DrawString("Type\tName\t\t\tSize", new Font(FontFamily.GenericSerif, 12), new SolidBrush(Color.Black), 
+            g.DrawString("Type\tSize\tName", new Font(FontFamily.GenericSerif, 12), new SolidBrush(Color.Black), 
                 new PointF(DRAWX - 2, DRAWY - 4 - DRAWYOFFSET));
             g.FillRectangle(new SolidBrush(Color.Gray), new Rectangle(DRAWX + DRAWWIDTH + 10, DRAWY, 20,
                 DRAWYOFFSET * MAXFILES));
@@ -135,15 +191,15 @@ namespace FileSizer
 
         private void MouseWheelEvent(object sender, MouseEventArgs e)
         {
-            Console.WriteLine(e.Delta);
             if(e.Delta > 0 && scroll > 0)
             {
                 scroll--;
-            }else if (e.Delta < 0 && scroll < maxScroll)
+            }
+            else if (e.Delta < 0 && scroll < maxScroll)
             {
                 scroll++;
             }
-            Console.WriteLine(maxScroll + ": " + scroll);
+            Repaint();
         }
 
         private void CloseEvent(object sender, FormClosedEventArgs e)
@@ -151,34 +207,96 @@ namespace FileSizer
             Environment.Exit(0);
         }
 
-        private void MouseEvent(object sender, MouseEventArgs e)
+        private void MouseDownEvent(object sender, MouseEventArgs e)
         {
             Folder folder;
-            if (e.X > 10 && e.X < 40 && e.Y > 2 && e.Y < 22)
+            if (backButton.IsPressed(e.X, e.Y) && backButton.IsActivated())
             {
-                if ((folder = currentFolder.GetParent()) != null)
+                folder = currentFolder.GetParent();
+                if (folder != null)
                 {
-                    currentPath = currentPath.Substring(0, currentPath.LastIndexOf('\\'));
                     currentFolder = folder;
-                    Repaint();
+                    currentPath = currentFolder.GetPath();
+                    refreshButton.SetActivated(false);
+                    UpdateFiles();
                 }
+            }
+            else if (sortBySizeButton.IsPressed(e.X, e.Y) && sortBySizeButton.IsActivated())
+            {
+                sortStatus = Folder.SortStatus.SIZE;
+                UpdateFiles();
+            }
+            else if (sortByNameButton.IsPressed(e.X, e.Y) && sortByNameButton.IsActivated())
+            {
+                sortStatus = Folder.SortStatus.NAME;
+                UpdateFiles();
+            }
+            else if (sortByTypeButton.IsPressed(e.X, e.Y) && sortByTypeButton.IsActivated())
+            {
+                sortStatus = Folder.SortStatus.TYPE;
+                UpdateFiles();
+            }
+            else if (refreshButton.IsPressed(e.X, e.Y) && refreshButton.IsActivated())
+            {
+                new Thread(RefreshCurrentFolder).Start();
+                UpdateFiles();
+            }
+            else if (new Rectangle(DRAWX + DRAWWIDTH + 10,
+                    DRAWY + (int)(((double)scroll / (double)maxScroll) * (DRAWYOFFSET * MAXFILES
+                    - (int)(((double)MAXFILES / (double)files.Length) * DRAWYOFFSET * MAXFILES))), 20,
+                    (int)(((double)MAXFILES / (double)files.Length) * DRAWYOFFSET * MAXFILES)).Contains(e.X, e.Y) 
+                    && files.Length > MAXFILES)
+            {
+                scrollBarPressed = true; 
             }
             lock (files)
             {
                 for (int i = scroll; i < Math.Min(files.Length, MAXFILES + scroll); i++)
                 {
-                    if (e.X > DRAWX && e.X < DRAWX + DRAWWIDTH && e.Y > DRAWY + DRAWYOFFSET * (i - scroll) && 
-                        e.Y < DRAWY + DRAWYOFFSET * (i - scroll) + DRAWHEIGHT)
+                    bool folderPressed = e.X > DRAWX && e.X < DRAWX + DRAWWIDTH && e.Y > DRAWY + DRAWYOFFSET * (i - scroll) &&
+                        e.Y < DRAWY + DRAWYOFFSET * (i - scroll) + DRAWHEIGHT;
+                    if (folderPressed)
                     {
-                        if((folder = currentFolder.GetFolder(files[i].Split('\t')[1])) != null)
+                        folder = currentFolder.GetFolder(files[i].Split('\t')[2]);
+                        if (folder != null)
                         {
-                            currentPath = currentPath + "\\" + files[i].Split('\t')[1];
+                            currentPath = folder.GetPath();
                             currentFolder = folder;
-                            Repaint();
+                            UpdateFiles();
                         }
                         break;
                     }
                 }
+            }
+        }
+
+        private void MouseUpEvent(object sender, MouseEventArgs e)
+        {
+            if (scrollBarPressed)
+            {
+                scrollBarPressed = false;
+            }
+        }
+
+        private void MouseMoveEvent(object sender, MouseEventArgs e)
+        {
+            if (scrollBarPressed)
+            {
+                int scrollValue = (int)(((double)(e.Y - DRAWY ) - (((double)MAXFILES / (double)files.Length) 
+                    * DRAWYOFFSET * MAXFILES) / 2) / ((double)(DRAWYOFFSET * MAXFILES) / maxScroll));
+                scroll = Math.Min(Math.Max(scrollValue + scrollValue, 0), maxScroll);
+                Repaint();
+            }
+        }
+
+        private void RefreshCurrentFolder()
+        {
+            long originalSize = currentFolder.GetSize();
+            long newSize = currentFolder.SearchFolder();
+            Folder parent = currentFolder.GetParent();
+            if (parent != null)
+            {
+                currentFolder.GetParent().UpdateParentWithSize(currentFolder.GetPath(), originalSize);
             }
         }
 
@@ -190,6 +308,21 @@ namespace FileSizer
                 lastPath = currentPath;
             }
             maxScroll = Math.Max(files.Length - MAXFILES, 0);
+        }
+
+        private void UpdateButtons()
+        {
+            if (currentFolder.GetStatus() == Folder.FileStatus.DONE)
+            {
+                refreshButton.SetActivated(true);
+            }
+            else
+            {
+                refreshButton.SetActivated(false);
+            }
+            sortBySizeButton.SetActivated(sortStatus != Folder.SortStatus.SIZE);
+            sortByNameButton.SetActivated(sortStatus != Folder.SortStatus.NAME);
+            sortByTypeButton.SetActivated(sortStatus != Folder.SortStatus.TYPE);
         }
     }
 }
