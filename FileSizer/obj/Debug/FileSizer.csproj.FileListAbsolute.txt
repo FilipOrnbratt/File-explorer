@@ -1,7 +1,7 @@
 C:\Users\Filip\source\repos\FileSizer\FileSizer\bin\Debug\FileSizer.exe.config
 C:\Users\Filip\source\repos\FileSizer\FileSizer\bin\Debug\FileSizer.exe
 C:\Users\Filip\source\repos\FileSizer\FileSizer\bin\Debug\FileSizer.pdb
-C:\Users\Filip\source\repos\FileSizer\FileSizer\obj\Debug\FileSizer.csprojResolveAssemblyReference.cache
 C:\Users\Filip\source\repos\FileSizer\FileSizer\obj\Debug\FileSizer.csproj.CoreCompileInputs.cache
 C:\Users\Filip\source\repos\FileSizer\FileSizer\obj\Debug\FileSizer.exe
 C:\Users\Filip\source\repos\FileSizer\FileSizer\obj\Debug\FileSizer.pdb
+C:\Users\Filip\source\repos\FileSizer\FileSizer\obj\Debug\FileSizer.csprojAssemblyReference.cache

@@ -16,31 +16,30 @@ namespace FileSizer
         private string currentPath, lastPath;
         private string[] files;
         private Folder currentFolder;
-        private int scroll, maxScroll, scrollBarY;
+        private int scroll, maxScroll;
         private bool scrollBarPressed;
         private Folder.SortStatus sortStatus;
         private Folder.SortStatus lastSortStatus;
 
         public static void Main()
         {
-            new Window();
+            foreach (DriveInfo d in DriveInfo.GetDrives())
+            {
+                Folder drive = new Folder(null, d.Name);
+                new Window(drive);
+            }
         }
 
-        public Window()
+        public Window(Folder drive)
         {
             files = new string[0];
 
-            sortStatus = Folder.SortStatus.TYPE;
+            sortStatus = Folder.SortStatus.SIZE;
             lastSortStatus = sortStatus;
-            
-            root = new Folder(null, "root");
-            foreach (DriveInfo d in DriveInfo.GetDrives())
-            {
-                Folder drive = new Folder(root, d.Name);
-                root.AddFolder(drive);
-                Thread driveThread = new Thread(new ParameterizedThreadStart(StartDriveSearch));
-                driveThread.Start(drive);
-            }
+
+            root = drive;
+            Thread driveThread = new Thread(new ParameterizedThreadStart(StartDriveSearch));
+            driveThread.Start(drive);
 
             new Thread(Init).Start();
             new Thread(UpdateFilesPeriodically).Start();
@@ -75,11 +74,6 @@ namespace FileSizer
             this.FormClosed += CloseEvent;
             this.MouseWheel += MouseWheelEvent;
             ShowDialog();
-        }
-
-        private void Window_MouseHover(object sender, EventArgs e)
-        {
-            throw new NotImplementedException();
         }
 
         private void InitButtons()
@@ -210,7 +204,8 @@ namespace FileSizer
         private void MouseDownEvent(object sender, MouseEventArgs e)
         {
             Folder folder;
-            if (backButton.IsPressed(e.X, e.Y) && backButton.IsActivated())
+            if ((e.Button == System.Windows.Forms.MouseButtons.Right || 
+                backButton.IsPressed(e.X, e.Y)) && backButton.IsActivated())
             {
                 folder = currentFolder.GetParent();
                 if (folder != null)
@@ -249,25 +244,29 @@ namespace FileSizer
             {
                 scrollBarPressed = true; 
             }
-            lock (files)
+            else
             {
-                for (int i = scroll; i < Math.Min(files.Length, MAXFILES + scroll); i++)
+                lock (files)
                 {
-                    bool folderPressed = e.X > DRAWX && e.X < DRAWX + DRAWWIDTH && e.Y > DRAWY + DRAWYOFFSET * (i - scroll) &&
-                        e.Y < DRAWY + DRAWYOFFSET * (i - scroll) + DRAWHEIGHT;
-                    if (folderPressed)
+                    for (int i = scroll; i < Math.Min(files.Length, MAXFILES + scroll); i++)
                     {
-                        folder = currentFolder.GetFolder(files[i].Split('\t')[2]);
-                        if (folder != null)
+                        bool folderPressed = e.X > DRAWX && e.X < DRAWX + DRAWWIDTH && e.Y > DRAWY + DRAWYOFFSET * (i - scroll) &&
+                            e.Y < DRAWY + DRAWYOFFSET * (i - scroll) + DRAWHEIGHT;
+                        if (folderPressed)
                         {
-                            currentPath = folder.GetPath();
-                            currentFolder = folder;
-                            UpdateFiles();
+                            folder = currentFolder.GetFolder(files[i].Split('\t')[2]);
+                            if (folder != null)
+                            {
+                                currentPath = folder.GetPath();
+                                currentFolder = folder;
+                                UpdateFiles();
+                            }
+                            break;
                         }
-                        break;
                     }
                 }
             }
+            
         }
 
         private void MouseUpEvent(object sender, MouseEventArgs e)
