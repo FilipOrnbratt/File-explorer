@@ -10,6 +10,7 @@ namespace FileSizer
         private bool activated;
         private Color? deactivatedColor;
         private Color? borderColor;
+
         public Button(Rectangle postion, string text, Color color, bool activated = false, 
             Color? deactivatedColor = null, Color? borderColor = null)
         {

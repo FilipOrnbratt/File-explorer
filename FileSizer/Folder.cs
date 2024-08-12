@@ -43,53 +43,59 @@ namespace FileSizer
             files = new List<FileData>();
         }
 
-        public long SearchFolder()
+        public long RefreshFolder()
+        {
+            ClearFolder();
+            return SearchFolder();
+        }
+
+        public void ClearFolder()
         {
             status = FileStatus.LOADING;
             subFolders.Clear();
             files.Clear();
+            size = 0;
+        }
+
+        public long SearchFolder()
+        {
             long totalSize = 0;
             try
             {
-                foreach (string f in Directory.GetDirectories(path))
+                foreach (string folderPath in Directory.GetDirectories(path))
                 {
-                    
-                    Folder folder = new Folder(this, f);
-                    FileInfo folderInfo = new FileInfo(f);
-                    if (folderInfo.Attributes.HasFlag(FileAttributes.ReparsePoint))
-                    {
-                        continue;
-                    }
+                    Folder folder = new Folder(this, folderPath);
+                    FileInfo folderInfo = new FileInfo(folderPath);
+
                     lock (subFolders)
                     {
                         subFolders.Add(folder);
                     }
-                    totalSize += folder.SearchFolder();
+                    totalSize += folder.RefreshFolder();
                 }
 
                 
-                foreach (string f in Directory.GetFiles(path))
+                foreach (string filePath in Directory.GetFiles(path))
                 {
-                    FileInfo fileInfo = new FileInfo(f);
-                    if (fileInfo.Attributes.HasFlag(FileAttributes.ReparsePoint))
-                    {
-                        continue;
-                    }
+                    FileInfo fileInfo = new FileInfo(filePath);
+
                     lock (files)
                     {
                         try
                         {
-                            FileData file = new FileData();
-                            file.name = fileInfo.Name;
-                            file.path = fileInfo.FullName;
-                            file.ext = fileInfo.Extension;
-                            file.size = fileInfo.Length;
+                            FileData file = new FileData
+                            {
+                                name = fileInfo.Name,
+                                path = fileInfo.FullName,
+                                ext = fileInfo.Extension,
+                                size = fileInfo.Length
+                            };
                             files.Add(file);
                             totalSize += file.size;
                         }
                         catch (FileNotFoundException e)
                         {
-                            Console.WriteLine("The file: \"" + f + "\" not found");
+                            Console.WriteLine("The file: \"" + filePath + "\" not found");
                         }
                     }
                 }
@@ -99,12 +105,10 @@ namespace FileSizer
             {
                 Console.WriteLine("The folder: \"" + path + "\" not found");
             }
-            catch (UnauthorizedAccessException e)
-            {
-                //Console.WriteLine("Can't access path: " + path);
-            }
-            status = FileStatus.DONE;
+            catch (UnauthorizedAccessException e) {}
+
             size = totalSize;
+            status = FileStatus.DONE;
             return totalSize;
         }
 
@@ -142,12 +146,12 @@ namespace FileSizer
 
         public string[] GetFileInfo(SortStatus sortStatus)
         {
-            string[] info;
+            string[] fileInfoText;
             lock (subFolders)
             {
                 lock (files)
                 {
-                    info = new string[subFolders.Count + files.Count];
+                    fileInfoText = new string[subFolders.Count + files.Count];
                     int i = 0;
                     if (sortStatus != SortStatus.TYPE)
                     {
@@ -165,23 +169,23 @@ namespace FileSizer
                         }
                         foreach (FileData file in sortFiles)
                         {
-                            info[i++] = file.ext + "\t" + SizeToString(file.size) + "\t" + file.name;
+                            fileInfoText[i++] = file.ext + "\t" + SizeToString(file.size) + "\t" + file.name;
                         }
                     }
                     else
                     {
                         foreach (Folder folder in subFolders)
                         {
-                            info[i++] = "Dir\t" + SizeToString(folder.GetSize()) + "\t" + GetNameFromPath(folder.path);
+                            fileInfoText[i++] = "Dir\t" + SizeToString(folder.GetSize()) + "\t" + GetNameFromPath(folder.path);
                         }
                         foreach (FileData file in files)
                         {
-                            info[i++] = file.ext + "\t" + SizeToString(file.size) + "\t" + file.name;
+                            fileInfoText[i++] = file.ext + "\t" + SizeToString(file.size) + "\t" + file.name;
                         }
                     }
                 }
             }
-            return info;
+            return fileInfoText;
         }
 
         private List<FileData> ConvertFoldersToFileData(List<Folder> folders)
@@ -189,11 +193,13 @@ namespace FileSizer
             List<FileData> fileDataList = new List<FileData>();
             foreach (Folder folder in folders)
             {
-                FileData filedata = new FileData();
-                filedata.name = GetNameFromPath(folder.path);
-                filedata.path = folder.GetPath();
-                filedata.ext = "Dir";
-                filedata.size = folder.GetSize();
+                FileData filedata = new FileData
+                {
+                    name = GetNameFromPath(folder.path),
+                    path = folder.GetPath(),
+                    ext = "Dir",
+                    size = folder.GetSize()
+                };
                 fileDataList.Add(filedata);
             }
             return fileDataList;
@@ -212,54 +218,24 @@ namespace FileSizer
         private string SizeToString(long size)
         {
             string suffix = "B";
-            if (size >= 1000000000000)
+
+            string[] suffixes = { "K", "M", "G", "T" };
+            for (int i = 0;  size >= 1000 && i < suffixes.Length; i++)
             {
-                suffix = "T" + suffix;
-                size /= 1000000000000;
-            }
-            else if (size >= 1000000000)
-            {
-                suffix = "G" + suffix;
-                size /= 1000000000;
-            }
-            else if (size >= 1000000)
-            {
-                suffix = "M" + suffix;
-                size /= 1000000;
-            }
-            else if (size >= 1000)
-            {
-                suffix = "K" + suffix;
                 size /= 1000;
+                suffix = suffixes[i];
             }
+
             return size + suffix;
         }
 
-        public void UpdateParentWithSize(string folderPath, long oldSize)
+        public void UpdateParentWithSize(long diff)
         {
-            Folder changedFolder = null;
-            foreach (Folder folder in subFolders)
-            {
-                if (folder.path == folderPath)
-                {
-                    changedFolder = folder;
-                    break;
-                }
-            }
-            if (changedFolder == null)
-            {
-                return;
-            }
-            long diff = changedFolder.size - oldSize;
-            if (diff == 0)
-            {
-                return;
-            }
-            long originalSize = size;
             size += diff;
+
             if (parentFolder != null)
             {
-                parentFolder.UpdateParentWithSize(path, originalSize);
+                parentFolder.UpdateParentWithSize(diff);
             }
         }
 

@@ -4,6 +4,7 @@ using System.IO;
 using System.Windows.Forms;
 using System.Drawing;
 using System.Threading;
+using System.Collections.Generic;
 
 namespace FileSizer
 {
@@ -20,14 +21,22 @@ namespace FileSizer
         private bool scrollBarPressed;
         private Folder.SortStatus sortStatus;
         private Folder.SortStatus lastSortStatus;
+        private Thread driveThread, drawThread;
 
         public static void Main()
         {
-            foreach (DriveInfo d in DriveInfo.GetDrives())
+            List<Window> windows = new List<Window>();
+            foreach (DriveInfo driveInfo in DriveInfo.GetDrives())
             {
-                Folder drive = new Folder(null, d.Name);
-                new Window(drive);
+                Folder drive = new Folder(null, driveInfo.Name);
+                windows.Add(new Window(drive));
             }
+
+            foreach (Window window in windows)
+            {
+                window.WaitForExit();
+            }
+            Environment.Exit(0);
         }
 
         public Window(Folder drive)
@@ -38,41 +47,35 @@ namespace FileSizer
             lastSortStatus = sortStatus;
 
             root = drive;
-            Thread driveThread = new Thread(new ParameterizedThreadStart(StartDriveSearch));
-            driveThread.Start(drive);
-
             new Thread(Init).Start();
-            new Thread(UpdateFilesPeriodically).Start();
+
+            driveThread = new Thread(() => StartDriveSearch(drive));
+            driveThread.Start();
+
+            drawThread = new Thread(UpdateGUIPeriodically);
+            drawThread.Start();
         }
 
-        private void StartDriveSearch(object folder)
+        private void StartDriveSearch(Folder folder)
         {
-            ((Folder)folder).SearchFolder();
-            bool drivesStillSearching = false;
-            foreach (Folder drive in root.GetFolders())
-            {
-                if (drive.GetStatus() == Folder.FileStatus.LOADING)
-                {
-                    drivesStillSearching = true;
-                }
-            }
-            if (!drivesStillSearching)
-            {
-                root.SetStatus(Folder.FileStatus.DONE);
-            }
+            folder.SearchFolder();
         }
 
         private void Init()
         {
             InitButtons();
+
+            this.Text = "File explorer for drive " + root.GetPath();
             this.DoubleBuffered = true;
             this.Size = new Size(1280, 720);
+
             this.Paint += Draw;
             this.MouseDown += MouseDownEvent;
             this.MouseUp += MouseUpEvent;
             this.MouseMove += MouseMoveEvent;
             this.FormClosed += CloseEvent;
             this.MouseWheel += MouseWheelEvent;
+
             ShowDialog();
         }
 
@@ -85,19 +88,19 @@ namespace FileSizer
             refreshButton = new Button(new Rectangle(REFRESHX, REFRESHY, 60, 20), "Refresh", Color.Green, false, Color.Gray);
         }
 
-        private void UpdateFilesPeriodically()
+        private void UpdateGUIPeriodically()
         {
             currentFolder = root;
             currentPath = currentFolder.GetPath();
             lastPath = currentPath;
             while (true)
             {
-                UpdateFiles();
+                UpdateGUI();
                 Thread.Sleep(1000);
             }
         }
 
-        private void UpdateFiles()
+        private void UpdateGUI()
         {
             if(currentFolder != null)
             {
@@ -107,9 +110,10 @@ namespace FileSizer
                     if (!files.SequenceEqual<string>(currentFiles) || lastSortStatus != sortStatus)
                     {
                         files = currentFiles;
+                        lastSortStatus = sortStatus;
+
                         UpdateScroll();
                         UpdateButtons();
-                        lastSortStatus = sortStatus;
                         Repaint();
                     }
                 }
@@ -132,8 +136,10 @@ namespace FileSizer
         private void Draw(object sender, PaintEventArgs e)
         {
             Graphics g = e.Graphics;
+
             backButton.Draw(g);
             refreshButton.Draw(g);
+
             if (currentFolder != null)
             {
                 string statusMessage = "";
@@ -196,15 +202,23 @@ namespace FileSizer
             Repaint();
         }
 
+        public void WaitForExit()
+        {
+            driveThread.Join();
+            drawThread.Join();
+        }
+
         private void CloseEvent(object sender, FormClosedEventArgs e)
         {
-            Environment.Exit(0);
+            // Terminate threads when window is closed
+            driveThread.Abort();
+            drawThread.Abort();
         }
 
         private void MouseDownEvent(object sender, MouseEventArgs e)
         {
             Folder folder;
-            if ((e.Button == System.Windows.Forms.MouseButtons.Right || 
+            if ((e.Button == MouseButtons.Right ||
                 backButton.IsPressed(e.X, e.Y)) && backButton.IsActivated())
             {
                 folder = currentFolder.GetParent();
@@ -213,28 +227,29 @@ namespace FileSizer
                     currentFolder = folder;
                     currentPath = currentFolder.GetPath();
                     refreshButton.SetActivated(false);
-                    UpdateFiles();
+                    UpdateGUI();
                 }
             }
             else if (sortBySizeButton.IsPressed(e.X, e.Y) && sortBySizeButton.IsActivated())
             {
                 sortStatus = Folder.SortStatus.SIZE;
-                UpdateFiles();
+                UpdateGUI();
             }
             else if (sortByNameButton.IsPressed(e.X, e.Y) && sortByNameButton.IsActivated())
             {
                 sortStatus = Folder.SortStatus.NAME;
-                UpdateFiles();
+                UpdateGUI();
             }
             else if (sortByTypeButton.IsPressed(e.X, e.Y) && sortByTypeButton.IsActivated())
             {
                 sortStatus = Folder.SortStatus.TYPE;
-                UpdateFiles();
+                UpdateGUI();
             }
             else if (refreshButton.IsPressed(e.X, e.Y) && refreshButton.IsActivated())
             {
-                new Thread(RefreshCurrentFolder).Start();
-                UpdateFiles();
+                currentFolder.ClearFolder();
+                UpdateGUI();
+                new Thread(SearchCurrentFolder).Start();
             }
             else if (new Rectangle(DRAWX + DRAWWIDTH + 10,
                     DRAWY + (int)(((double)scroll / (double)maxScroll) * (DRAWYOFFSET * MAXFILES
@@ -254,12 +269,13 @@ namespace FileSizer
                             e.Y < DRAWY + DRAWYOFFSET * (i - scroll) + DRAWHEIGHT;
                         if (folderPressed)
                         {
-                            folder = currentFolder.GetFolder(files[i].Split('\t')[2]);
+                            string folderName = files[i].Split('\t')[2];
+                            folder = currentFolder.GetFolder(folderName);
                             if (folder != null)
                             {
                                 currentPath = folder.GetPath();
                                 currentFolder = folder;
-                                UpdateFiles();
+                                UpdateGUI();
                             }
                             break;
                         }
@@ -288,14 +304,14 @@ namespace FileSizer
             }
         }
 
-        private void RefreshCurrentFolder()
+        private void SearchCurrentFolder()
         {
             long originalSize = currentFolder.GetSize();
             long newSize = currentFolder.SearchFolder();
             Folder parent = currentFolder.GetParent();
             if (parent != null)
             {
-                currentFolder.GetParent().UpdateParentWithSize(currentFolder.GetPath(), originalSize);
+                currentFolder.GetParent().UpdateParentWithSize(newSize - originalSize);
             }
         }
 
@@ -311,14 +327,8 @@ namespace FileSizer
 
         private void UpdateButtons()
         {
-            if (currentFolder.GetStatus() == Folder.FileStatus.DONE)
-            {
-                refreshButton.SetActivated(true);
-            }
-            else
-            {
-                refreshButton.SetActivated(false);
-            }
+            refreshButton.SetActivated(currentFolder.GetStatus() == Folder.FileStatus.DONE);
+
             sortBySizeButton.SetActivated(sortStatus != Folder.SortStatus.SIZE);
             sortByNameButton.SetActivated(sortStatus != Folder.SortStatus.NAME);
             sortByTypeButton.SetActivated(sortStatus != Folder.SortStatus.TYPE);
